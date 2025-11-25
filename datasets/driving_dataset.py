@@ -732,6 +732,9 @@ class DrivingDataset(SceneDataset):
         
         novel_trajs = {}
         for traj_type in traj_types:
+            if traj_type == "lane_shift":
+                novel_trajs[traj_type] = None
+                continue
             novel_trajs[traj_type] = get_interp_novel_trajectories(
                 self.type,
                 self.scene_idx,

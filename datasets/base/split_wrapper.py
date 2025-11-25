@@ -26,6 +26,13 @@ class SplitWrapper(torch.utils.data.Dataset):
         self.datasource.reset_downscale_factor()
         return image_infos, cam_infos
 
+    def get_image_mock(self, idx, camera_downscale, mock_id, mock_dist) -> dict:
+        downscale_factor = 1 / camera_downscale * self.datasource.downscale_factor
+        self.datasource.update_downscale_factor(downscale_factor)
+        image_infos, cam_infos = self.datasource.get_image_mock(self.split_indices[idx], mock_id, mock_dist)
+        self.datasource.reset_downscale_factor()
+        return image_infos, cam_infos
+        
     def next(self, camera_downscale) -> Tuple[dict, dict]:
         assert self.split == "train", "Only train split supports next()"
         

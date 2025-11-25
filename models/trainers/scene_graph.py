@@ -196,7 +196,9 @@ class MultiTrainer(BasicTrainer):
         self, 
         image_infos: Dict[str, torch.Tensor],
         camera_infos: Dict[str, torch.Tensor],
-        novel_view: bool = False
+        novel_view: bool = False,
+        compute_uncertainty: bool = False,
+        is_train_set: bool = False
     ) -> Dict[str, torch.Tensor]:
         """Forward pass of the model
 
@@ -238,16 +240,41 @@ class MultiTrainer(BasicTrainer):
         )
 
         # render gaussians
-        outputs, render_fn = self.render_gaussians(
+        if compute_uncertainty:
+            if "sky_masks" in image_infos:
+                self.sky_masks = image_infos["sky_masks"]
+            else:
+                self.sky_masks = None
+            outputs, render_fn = self.render_uncertainly_gaussians(
             gs=gs,
             cam=processed_cam,
             near_plane=self.render_cfg.near_plane,
             far_plane=self.render_cfg.far_plane,
             render_mode="RGB+ED",
-            radius_clip=self.render_cfg.get('radius_clip', 0.)
-        )
-        
-        # render sky
+            radius_clip=self.render_cfg.get('radius_clip', 0.),
+            is_train_set = is_train_set
+            )
+            if not is_train_set: #render new view
+                outputs_opcity, render_fn_opcity = self.render_gaussians(
+                    gs=gs,
+                    cam=processed_cam,
+                    near_plane=self.render_cfg.near_plane,
+                    far_plane=self.render_cfg.far_plane,
+                    render_mode="RGB+ED",
+                    radius_clip=self.render_cfg.get('radius_clip', 0.)
+                )
+                outputs["opacity"] = outputs_opcity["opacity"]
+                outputs["rgb_gaussians"] = outputs_opcity["rgb_gaussians"]
+        else:
+            outputs, render_fn = self.render_gaussians(
+                gs=gs,
+                cam=processed_cam,
+                near_plane=self.render_cfg.near_plane,
+                far_plane=self.render_cfg.far_plane,
+                render_mode="RGB+ED",
+                radius_clip=self.render_cfg.get('radius_clip', 0.)
+            )
+
         sky_model = self.models['Sky']
         outputs["rgb_sky"] = sky_model(image_infos)
         outputs["rgb_sky_blend"] = outputs["rgb_sky"] * (1.0 - outputs["opacity"])
@@ -265,15 +292,30 @@ class MultiTrainer(BasicTrainer):
                     outputs[class_name+"_rgb"] = self.affine_transformation(sep_rgb, image_infos)
                     outputs[class_name+"_opacity"] = sep_opacity
                     outputs[class_name+"_depth"] = sep_depth
-
-        if not self.training or self.render_dynamic_mask:
-            with torch.no_grad():
-                gaussian_mask = self.pts_labels != self.gaussian_classes["Background"]
-                sep_rgb, sep_depth, sep_opacity = render_fn(gaussian_mask)
-                outputs["Dynamic_rgb"] = self.affine_transformation(sep_rgb, image_infos)
-                outputs["Dynamic_opacity"] = sep_opacity
-                outputs["Dynamic_depth"] = sep_depth
-        
+        if not (compute_uncertainty and not novel_view):
+            if novel_view:
+                with torch.no_grad():
+                    gaussian_mask = self.pts_labels != self.gaussian_classes["Background"]
+                    tmp_outputs, render_fn = self.render_gaussians(
+                        gs=gs,
+                        cam=processed_cam,
+                        near_plane=self.render_cfg.near_plane,
+                        far_plane=self.render_cfg.far_plane,
+                        render_mode="RGB+ED",
+                        radius_clip=self.render_cfg.get('radius_clip', 0.),
+                        gaussian_mask=gaussian_mask,
+                    )
+                    sep_rgb, sep_depth, sep_opacity = tmp_outputs["rgb_gaussians"], tmp_outputs["depth"], tmp_outputs["opacity"]
+                    outputs["Dynamic_rgb"] = self.affine_transformation(sep_rgb, image_infos)
+                    outputs["Dynamic_opacity"] = sep_opacity
+                    outputs["Dynamic_depth"] = sep_depth
+            elif not self.training or self.render_dynamic_mask or ("diffusion_type" in image_infos and image_infos["diffusion_type"] in ["bg","obj"]):
+                with torch.no_grad():
+                    gaussian_mask = self.pts_labels != self.gaussian_classes["Background"]
+                    sep_rgb, sep_depth, sep_opacity = render_fn(gaussian_mask)
+                    outputs["Dynamic_rgb"] = self.affine_transformation(sep_rgb, image_infos)
+                    outputs["Dynamic_opacity"] = sep_opacity
+                    outputs["Dynamic_depth"] = sep_depth
         return outputs
 
     def compute_losses(

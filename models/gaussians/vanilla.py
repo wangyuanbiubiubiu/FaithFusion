@@ -394,14 +394,15 @@ class VanillaGaussians(nn.Module):
         activated_scales = self.get_scaling
         activated_rotations = self.get_quats
         actovated_colors = rgbs
+        actovated_shs = colors
         
-        # collect gaussians information
         gs_dict = dict(
             _means=self._means[filter_mask],
             _opacities=activated_opacities[filter_mask],
             _rgbs=actovated_colors[filter_mask],
             _scales=activated_scales[filter_mask],
             _quats=activated_rotations[filter_mask],
+            _shs=actovated_shs[filter_mask],
         )
         
         # check nan and inf in gs_dict

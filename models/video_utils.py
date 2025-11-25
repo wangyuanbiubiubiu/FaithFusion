@@ -4,6 +4,10 @@ import numpy as np
 import os
 import logging
 import imageio
+import matplotlib.pyplot as plt
+import seaborn as sns
+import torchvision
+from PIL import Image
 
 import torch
 from torch import Tensor
@@ -459,6 +463,139 @@ def render_novel_views(trainer, render_data: list, save_path: str, fps: int = 30
             writer.append_data(rgb_uint8)
     
     writer.close()
+    print(f"Video saved to {save_path}")
+
+def render_train_views_uncertainty(trainer: BasicTrainer, dataset: SplitWrapper, extra_dist=None):
+    """
+    render_train_views_uncertainty
+    """    
+    indices = range(len(dataset))
+    camera_downscale = trainer._get_downscale_factor()
+    trainer.set_train()
+    H_per_gaussian = {}
+    
+    trainer.H_per_gaussian = H_per_gaussian
+    last_img_idx = -1
+    duplicated_cnt = 0
+    for i in tqdm(indices, desc=f"rendering {dataset.split}", dynamic_ncols=True):
+        img_idx = dataset.split_indices[i]
+        image_infos, cam_infos = dataset.get_image(i, camera_downscale)
+        image_infos['diffusion_img_idx'] = torch.full(image_infos['img_idx'].shape, 0, dtype=torch.long)
+        duplicated_cnt = 0
+            
+        for k, v in image_infos.items():
+            if isinstance(v, Tensor):
+                image_infos[k] = v.cuda(non_blocking=True)
+        for k, v in cam_infos.items():
+            if isinstance(v, Tensor):
+                cam_infos[k] = v.cuda(non_blocking=True)
+        # render the image
+        results = trainer(image_infos, cam_infos, compute_uncertainty=True, is_train_set=True)
+        last_img_idx = img_idx
+    
+    if extra_dist != None:
+        for i in tqdm(indices, desc=f"rendering extra {dataset.split}", dynamic_ncols=True):
+            img_idx = dataset.split_indices[i]
+            image_infos, cam_infos = dataset.datasource.get_image_mock(img_idx, mock_id=1, mock_dist=extra_dist)
+            dataset.get_image(i, camera_downscale)
+            image_infos['diffusion_img_idx'] = torch.full(image_infos['img_idx'].shape, img_idx + 1, dtype=torch.long)
+            for k, v in image_infos.items():
+                if isinstance(v, Tensor):
+                    image_infos[k] = v.cuda(non_blocking=True)
+            for k, v in cam_infos.items():
+                if isinstance(v, Tensor):
+                    cam_infos[k] = v.cuda(non_blocking=True)
+            # render the image
+            results = trainer(image_infos, cam_infos, compute_uncertainty=True, is_train_set=True)
+
+    reg_lambda = 1e-6
+    trainer.H_per_gaussian_full = next(iter(trainer.H_per_gaussian.values()))
+    for key, tensor in trainer.H_per_gaussian.items():
+        if tensor is not trainer.H_per_gaussian_full:
+            trainer.H_per_gaussian_full  += tensor
+    trainer.I_train = torch.reciprocal(trainer.H_per_gaussian_full + reg_lambda)
+    trainer.I_train_sqrt = torch.sqrt(trainer.I_train)
+
+# @torch.no_grad()
+def render_novel_views_uncertainty(trainer, render_data: list, save_path: str, fps: int = 30, compute_uncertainty=True) -> None:
+    """
+    render_novel_views_uncertainty
+    """    
+    # writer = imageio.get_writer(save_path, mode='I', fps=fps)
+    res_dict = os.path.dirname(save_path)
+
+    idx = 0
+    path_dic_total = []
+    
+    for frame_data in render_data:
+        path_dic = {}
+        # Move data to GPU
+        for key, value in frame_data["cam_infos"].items():
+            if isinstance(value, Tensor):
+                frame_data["cam_infos"][key] = value.cuda(non_blocking=True)
+        for key, value in frame_data["image_infos"].items():
+            if isinstance(value, Tensor):
+                frame_data["image_infos"][key] = value.cuda(non_blocking=True)
+        
+        # Perform rendering
+        outputs = trainer(
+            image_infos=frame_data["image_infos"],
+            camera_infos=frame_data["cam_infos"],
+            novel_view=True,
+            compute_uncertainty=compute_uncertainty
+        )
+        
+        # Extract RGB image and mask
+        rgb = outputs["rgb"].detach().cpu().numpy().clip(
+            min=1.e-6, max=1-1.e-6
+        )
+        torchvision.utils.save_image(outputs["rgb"].permute(2, 0, 1).detach(), os.path.join(res_dict, f"rgb_{idx}.png"))
+        if "pixels" in frame_data["image_infos"]:
+            torchvision.utils.save_image(frame_data["image_infos"]["pixels"].permute(2, 0, 1).detach(), os.path.join(res_dict, f"gt_{idx}.png"))
+        if compute_uncertainty:
+            torchvision.utils.save_image((outputs["Dynamic_opacity"].permute(2, 0, 1).detach() > 0.6).float(), os.path.join(res_dict, f"Dynamic_opacity_{idx}.png"))
+            outputs["gain_map"] = torch.log(outputs["gain_map"] + 1.0) + 1e-9
+            opacity_filter = outputs["opacity"] < 0.1
+            outputs["gain_map"][opacity_filter[:,:,0]] = 100.0
+            torch.save(outputs["gain_map"], os.path.join(res_dict, f"gain_{idx}.pt"))
+
+            #gain visualization
+            cmap = plt.get_cmap('viridis', 6)
+            bounds = [0, 0.05, 0.1, 0.2, 0.5, 1.0, float('inf')]
+            gain_map_discrete = torch.zeros_like(outputs["gain_map"], dtype=torch.long)
+            for i in range(len(bounds) - 1):
+                mask = (outputs["gain_map"] >= bounds[i]) & (outputs["gain_map"] < bounds[i + 1])
+                gain_map_discrete[mask] = i
+            gain_map_discrete[(outputs["gain_map"] >= bounds[-1])] = len(bounds) - 1
+            height, width = outputs["gain_map"].shape
+            heatmap_path = os.path.join(res_dict, f"gain_heatmap_{idx}.png")
+            plt.figure(figsize=(width/100, height/100), dpi=100)
+            sns.heatmap(
+                gain_map_discrete.detach().cpu(), 
+                cmap=cmap, 
+                square=False,
+                xticklabels=False,
+                yticklabels=False,
+                cbar=False 
+            )
+            plt.axis('off')
+            plt.savefig(heatmap_path, dpi=100, bbox_inches='tight', pad_inches=0)
+            plt.close()
+
+            path_dic["rgb"] = f"rgb_{idx}.png" 
+            path_dic["gain"] = f"gain_{idx}.pt" 
+            path_dic["gt"] = f"gt_{idx}.png" 
+            path_dic_total.append(path_dic)
+        # writer.append_data(rgb_uint8)
+        idx += 1
+    if compute_uncertainty:
+        import json
+        json_path = os.path.join(os.path.dirname(save_path), "pair_path.json")
+        with open(json_path, 'w') as json_file:
+            json.dump(path_dic_total, json_file, indent=4)
+        print(f"Path mapping saved to {json_path}")
+    
+    # writer.close()
     print(f"Video saved to {save_path}")
 
 

@@ -308,8 +308,8 @@ class RigidNodes(VanillaGaussians):
         # get the instance boxes
         per_pts_size = self.instances_size[self.point_ids[..., 0]]
         instance_pts = self._means
-        
-        mask = (instance_pts.abs() > per_pts_size / 2).any(dim=-1)
+        #relax
+        mask = (instance_pts.abs() > (1.5 * per_pts_size) / 2).any(dim=-1)
         return mask
 
     def transform_means(self, means: torch.Tensor) -> torch.Tensor:
@@ -400,7 +400,8 @@ class RigidNodes(VanillaGaussians):
         activated_scales = self.get_scaling
         activated_rotations = self.quat_act(world_quats)
         actovated_colors = rgbs
-        
+        actovated_shs = colors
+
         # collect gaussians information
         gs_dict = dict(
             _means=world_means[filter_mask],
@@ -408,6 +409,7 @@ class RigidNodes(VanillaGaussians):
             _rgbs=actovated_colors[filter_mask],
             _scales=activated_scales[filter_mask],
             _quats=activated_rotations[filter_mask],
+            _shs=actovated_shs[filter_mask],
         )
         
         # check nan and inf in gs_dict

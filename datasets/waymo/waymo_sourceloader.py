@@ -84,6 +84,7 @@ class WaymoCameraData(CameraData):
         # compute per-image poses and intrinsics
         cam_to_worlds, ego_to_worlds = [], []
         intrinsics, distortions = [], []
+        cam_to_egoes = []
 
         # we tranform the camera poses w.r.t. the first timestep to make the translation vector of
         # the first ego pose as the origin of the world coordinate system.
@@ -96,17 +97,25 @@ class WaymoCameraData(CameraData):
             )
             # compute ego_to_world transformation
             ego_to_world = np.linalg.inv(ego_to_world_start) @ ego_to_world_current
-            ego_to_worlds.append(ego_to_world)
             # transformation:
             #   (opencv_cam -> waymo_cam -> waymo_ego_vehicle) -> current_world
             cam2world = ego_to_world @ cam_to_ego
             cam_to_worlds.append(cam2world)
             intrinsics.append(_intrinsics)
             distortions.append(_distortions)
+            ego_to_worlds.append(ego_to_world)
+            cam_to_egoes.append(cam_to_ego)
 
         self.intrinsics = torch.from_numpy(np.stack(intrinsics, axis=0)).float()
         self.distortions = torch.from_numpy(np.stack(distortions, axis=0)).float()
         self.cam_to_worlds = torch.from_numpy(np.stack(cam_to_worlds, axis=0)).float()
+        self.ego_to_worlds = torch.from_numpy(np.stack(ego_to_worlds, axis=0)).float()
+        self.cam_to_egoes = torch.from_numpy(np.stack(cam_to_egoes, axis=0)).float()
+
+    def to(self, device: torch.device):
+        super().to(device)
+        self.ego_to_worlds = self.ego_to_worlds.to(device)
+        self.cam_to_egoes = self.cam_to_egoes.to(device)
 
     @classmethod
     def get_camera2worlds(cls, data_path: str, cam_id: str, start_timestep: int, end_timestep: int) -> torch.Tensor:

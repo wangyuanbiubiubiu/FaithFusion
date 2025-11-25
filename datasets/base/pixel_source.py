@@ -643,6 +643,197 @@ class CameraData(object):
             "vehicle_masks": vehicle_mask,
             "egocar_masks": egocar_mask,
             "lidar_depth_map": lidar_depth_map,
+            "diffusion_type": "default", #default, bg, obj
+        }
+        image_infos = {k: v for k, v in _image_infos.items() if v is not None}
+        
+        cam_infos = {
+            "cam_id": camera_id,
+            "cam_name": self.cam_name,
+            "camera_to_world": c2w,
+            "height": torch.tensor(img_height, dtype=torch.long, device=c2w.device),
+            "width": torch.tensor(img_width, dtype=torch.long, device=c2w.device),
+            "intrinsics": intrinsics,
+        }
+        return image_infos, cam_infos
+
+    def get_image_mock(self, frame_idx: int, mock_id: int, mock_dist: float) -> Dict[str, Tensor]:
+        """
+        Get the rays for rendering the given frame index.
+        Args:
+            frame_idx: the frame index.
+        Returns:
+            a dict containing the rays for rendering the given frame index.
+        """
+        rgb, sky_mask = None, None
+        dynamic_mask, human_mask, vehicle_mask = None, None, None
+        pixel_coords, normalized_time = None, None
+        egocar_mask = None
+        
+        if self.images is not None:
+            rgb = self.images[frame_idx]
+            if self.downscale_factor != 1.0:
+                rgb = (
+                    torch.nn.functional.interpolate(
+                        rgb.unsqueeze(0).permute(0, 3, 1, 2),
+                        scale_factor=self.downscale_factor,
+                        mode="bicubic",
+                        antialias=True,
+                    )
+                    .squeeze(0)
+                    .permute(1, 2, 0)
+                )
+                img_height, img_width = rgb.shape[:2]
+            else:
+                img_height, img_width = self.HEIGHT, self.WIDTH
+
+        x, y = torch.meshgrid(
+            torch.arange(img_width),
+            torch.arange(img_height),
+            indexing="xy",
+        )
+        x, y = x.flatten(), y.flatten()
+        x, y = x.to(self.device), y.to(self.device)
+        # pixel coordinates
+        pixel_coords = (
+            torch.stack([y / img_height, x / img_width], dim=-1)
+            .float()
+            .reshape(img_height, img_width, 2)
+        )
+        if self.egocar_mask is not None:
+            egocar_mask = self.egocar_mask
+            if self.downscale_factor != 1.0:
+                egocar_mask = (
+                    torch.nn.functional.interpolate(
+                        egocar_mask.unsqueeze(0).unsqueeze(0),
+                        scale_factor=self.downscale_factor,
+                        mode="nearest",
+                    )
+                    .squeeze(0)
+                    .squeeze(0)
+                )
+        if self.sky_masks is not None:
+            sky_mask = self.sky_masks[frame_idx]
+            if self.downscale_factor != 1.0:
+                sky_mask = (
+                    torch.nn.functional.interpolate(
+                        sky_mask.unsqueeze(0).unsqueeze(0),
+                        scale_factor=self.downscale_factor,
+                        mode="nearest",
+                    )
+                    .squeeze(0)
+                    .squeeze(0)
+                )
+        if self.dynamic_masks is not None:
+            dynamic_mask = self.dynamic_masks[frame_idx]
+            if self.downscale_factor != 1.0:
+                dynamic_mask = (
+                    torch.nn.functional.interpolate(
+                        dynamic_mask.unsqueeze(0).unsqueeze(0),
+                        scale_factor=self.downscale_factor,
+                        mode="nearest",
+                    )
+                    .squeeze(0)
+                    .squeeze(0)
+                )
+        if self.human_masks is not None:
+            human_mask = self.human_masks[frame_idx]
+            if self.downscale_factor != 1.0:
+                human_mask = (
+                    torch.nn.functional.interpolate(
+                        human_mask.unsqueeze(0).unsqueeze(0),
+                        scale_factor=self.downscale_factor,
+                        mode="nearest",
+                    )
+                    .squeeze(0)
+                    .squeeze(0)
+                )
+        if self.vehicle_masks is not None:
+            vehicle_mask = self.vehicle_masks[frame_idx]
+            if self.downscale_factor != 1.0:
+                vehicle_mask = (
+                    torch.nn.functional.interpolate(
+                        vehicle_mask.unsqueeze(0).unsqueeze(0),
+                        scale_factor=self.downscale_factor,
+                        mode="nearest",
+                    )
+                    .squeeze(0)
+                    .squeeze(0)
+                )
+            
+        lidar_depth_map = None
+        if self.lidar_depth_maps is not None:
+            lidar_depth_map = self.lidar_depth_maps[frame_idx]
+            if self.downscale_factor != 1.0:
+                # BUG: cannot use, need futher investigation
+                # if self.data_cfg.denser_lidar_times > 1:
+                #     lidar_supervision_downsample = 1 / self.data_cfg.denser_lidar_times * self.downscale_factor
+                #     lidar_depth_map = sparse_lidar_map_downsampler(lidar_depth_map, lidar_supervision_downsample)
+                    
+                #     # resize back
+                #     lidar_depth_map = (
+                #         torch.nn.functional.interpolate(
+                #             lidar_depth_map.unsqueeze(0).unsqueeze(0),
+                #             scale_factor=self.data_cfg.denser_lidar_times,
+                #             mode="bicubic",
+                #         )
+                #         .squeeze(0)
+                #         .squeeze(0)
+                #     )
+                # else:
+                lidar_depth_map = sparse_lidar_map_downsampler(lidar_depth_map, self.downscale_factor)
+
+        if self.normalized_time is not None:
+            normalized_time = torch.full(
+                (img_height, img_width),
+                self.normalized_time[frame_idx],
+                dtype=torch.float32,
+            )
+        camera_id = torch.full(
+            (img_height, img_width),
+            self.cam_id,
+            dtype=torch.long,
+        )
+        image_id = torch.full(
+            (img_height, img_width),
+            self.unique_img_idx[frame_idx],
+            dtype=torch.long,
+        )
+        frame_id = torch.full(
+            (img_height, img_width),
+            frame_idx,
+            dtype=torch.long,
+        )
+        
+        render_shift = torch.from_numpy(np.array([[1., 0., 0., 0.],
+                                [0., 1., 0., mock_dist * mock_id],
+                                [0., 0., 1., 0],
+                                [0., 0., 0., 1.]])).to(self.cam_to_worlds[frame_idx])
+        ego_to_c = torch.inverse(self.cam_to_worlds[frame_idx]) @ self.ego_to_worlds[frame_idx]
+        new_ego_to_w = self.ego_to_worlds[frame_idx] @ render_shift
+        c2w = new_ego_to_w @ self.cam_to_egoes[frame_idx]
+        intrinsics = self.intrinsics[frame_idx] * self.downscale_factor
+        intrinsics[2, 2] = 1.0
+        origins, viewdirs, direction_norm = get_rays(x, y, c2w, intrinsics)
+        origins = origins.reshape(img_height, img_width, 3)
+        viewdirs = viewdirs.reshape(img_height, img_width, 3)
+        direction_norm = direction_norm.reshape(img_height, img_width, 1)
+        _image_infos = {
+            "origins": origins,
+            "viewdirs": viewdirs,
+            "direction_norm": direction_norm,
+            "pixel_coords": pixel_coords,
+            "normed_time": normalized_time,
+            "img_idx": image_id,
+            "frame_idx": frame_id,
+            "pixels": rgb,
+            "sky_masks": sky_mask,
+            "dynamic_masks": dynamic_mask,
+            "human_masks": human_mask,
+            "vehicle_masks": vehicle_mask,
+            "egocar_masks": egocar_mask,
+            "lidar_depth_map": lidar_depth_map,
+            "diffusion_type": "default", #default, bg, obj
         }
         image_infos = {k: v for k, v in _image_infos.items() if v is not None}
         
@@ -821,6 +1012,19 @@ class ScenePixelSource(abc.ABC):
         for cam_id in self.camera_list:
             if unique_cam_idx == self.camera_data[cam_id].unique_cam_idx:
                 return self.camera_data[cam_id].get_image(frame_idx)
+
+    def get_image_mock(self, img_idx: int, mock_id: int, mock_dist: float) -> Dict[str, Tensor]:
+        """
+        Get the rays for rendering the given image index.
+        Args:
+            img_idx: the image index.
+        Returns:
+            a dict containing the rays for rendering the given image index.
+        """
+        unique_cam_idx, frame_idx = self.parse_img_idx(img_idx)
+        for cam_id in self.camera_list:
+            if unique_cam_idx == self.camera_data[cam_id].unique_cam_idx:
+                return self.camera_data[cam_id].get_image_mock(frame_idx, mock_id, mock_dist)
 
     @property
     def camera_list(self) -> List[int]:

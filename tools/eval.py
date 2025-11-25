@@ -6,6 +6,8 @@ import json
 import wandb
 import logging
 import argparse
+from torch import Tensor
+import shutil
 
 import torch
 from datasets.driving_dataset import DrivingDataset
@@ -14,13 +16,55 @@ from models.trainers import BasicTrainer
 from models.video_utils import (
     render_images,
     save_videos,
-    render_novel_views
+    render_novel_views,
+    render_train_views_uncertainty,
+    render_novel_views_uncertainty
 )
 
 logger = logging.getLogger()
 current_time = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
 
-@torch.no_grad()
+def generate_segment_list(start, end, step, need_append_last=True):
+    # 生成从start到end(含)的列表，步长为step
+    seg_list = list(range(start, end + 1, step))
+    
+    # 如果提供了last_item且不在列表中，则添加到末尾
+    if need_append_last and end not in seg_list:
+        seg_list.append(end)
+    
+    return seg_list
+
+def prepare_EIGent_render_data(trainer, dataset, dist_max=0.0):
+    render_data = []
+    camera_downscale = 1.0
+
+    step = 40
+    seg_list = generate_segment_list(start=0, end=39, step=step, need_append_last=False)
+    for seg_begin in seg_list:
+        num_x_dist = 49 - step
+        mock_dist = dist_max / num_x_dist
+        for i in range(51):
+            if i < num_x_dist:
+                seg = seg_begin
+                mock_times = i
+            elif i < 49:
+                seg = i - num_x_dist + seg_begin
+                if seg > 39:
+                    seg = 39
+                mock_times = num_x_dist
+            else:
+                seg = seg_begin + step - 1
+                if seg > 39:
+                    seg = 39
+                mock_times = num_x_dist
+            image_infos, cam_infos = dataset.get_image_mock(seg, camera_downscale, mock_times, mock_dist)
+            render_data.append({
+                "cam_infos": cam_infos,
+                "image_infos": image_infos,
+            })
+    return render_data
+
+# @torch.no_grad()
 def do_evaluation(
     step: int = 0,
     cfg: OmegaConf = None,
@@ -157,17 +201,33 @@ def do_evaluation(
         video_output_dir = f"{cfg.log_dir}/videos{post_fix}/novel_{step}"
         if not os.path.exists(video_output_dir):
             os.makedirs(video_output_dir)
-        
+
+        render_EIG = render_novel_cfg.get("render_EIG", False)
+        if render_EIG:
+            #compute total EIG
+            render_train_views_uncertainty(trainer=trainer, dataset=dataset.train_image_set)
         for traj_type, traj in render_traj.items():
             # Prepare rendering data
-            render_data = dataset.prepare_novel_view_render_data(traj)
+            if traj_type == "lane_shift":
+                EIGent_output_dist = render_novel_cfg["lane_shift_dist"]
+                render_data = prepare_EIGent_render_data(trainer, dataset.train_image_set, EIGent_output_dist)
+            else:
+                render_data = dataset.prepare_novel_view_render_data(traj)
             
             # Render and save video
             save_path = os.path.join(video_output_dir, f"{traj_type}.mp4")
-            render_novel_views(
-                trainer, render_data, save_path,
-                fps=render_novel_cfg.get("fps", cfg.render.fps)
-            )
+            if render_EIG:
+                save_img_path = os.path.join(video_output_dir, traj_type, f"{traj_type}.mp4")
+                os.makedirs(os.path.join(video_output_dir, traj_type))
+                render_novel_views_uncertainty(
+                    trainer, render_data, save_img_path,
+                    fps=render_novel_cfg.get("fps", cfg.render.fps)
+                )
+            else:
+                render_novel_views(
+                    trainer, render_data, save_path,
+                    fps=render_novel_cfg.get("fps", cfg.render.fps)
+                )
             logger.info(f"Saved novel view video for trajectory type: {traj_type} to {save_path}")
             
 def main(args):
