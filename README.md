@@ -46,7 +46,7 @@ bash scripts/trans_camera_demo.sh
 - This is a multi-GPU parallel execution version. The script first defines the set of scenes to be processed (`scene_list`), specifies the set of cameras used for training in `train_cam_ids`, and renders the results to the set of target cameras specified in `render_cam_ids`.
 
 ## 🚀 Running
-### Rendering EIGg
+### Rendering EIG
 ```shell
 bash scripts/render_EIG_demo.sh
 ```
