@@ -64,6 +64,16 @@ def prepare_EIGent_render_data(trainer, dataset, dist_max=0.0):
             })
     return render_data
 
+def prepare_test_render_data(trainer, dataset):
+    render_data = []
+    camera_downscale = trainer._get_downscale_factor()
+    for i in range(len(dataset)):
+        image_infos, cam_infos = dataset.get_image(i, camera_downscale)
+        render_data.append({
+            "cam_infos": cam_infos,
+            "image_infos": image_infos,
+        })
+    return render_data
 # @torch.no_grad()
 def do_evaluation(
     step: int = 0,
@@ -205,12 +215,18 @@ def do_evaluation(
         render_EIG = render_novel_cfg.get("render_EIG", False)
         if render_EIG:
             #compute total EIG
+            if "switch_camera" in render_traj:
+                if len(render_traj) != 1 :
+                    raise ValueError("switch_camera only support trans cam")
+                trainer.initialize_optimizer_uncertainty()
             render_train_views_uncertainty(trainer=trainer, dataset=dataset.train_image_set)
         for traj_type, traj in render_traj.items():
             # Prepare rendering data
             if traj_type == "lane_shift":
                 EIGent_output_dist = render_novel_cfg["lane_shift_dist"]
                 render_data = prepare_EIGent_render_data(trainer, dataset.train_image_set, EIGent_output_dist)
+            elif traj_type == "switch_camera":
+                render_data = prepare_test_render_data(trainer, dataset.test_image_set)
             else:
                 render_data = dataset.prepare_novel_view_render_data(traj)
             
@@ -218,7 +234,10 @@ def do_evaluation(
             save_path = os.path.join(video_output_dir, f"{traj_type}.mp4")
             if render_EIG:
                 save_img_path = os.path.join(video_output_dir, traj_type, f"{traj_type}.mp4")
-                os.makedirs(os.path.join(video_output_dir, traj_type))
+                if os.path.exists(os.path.join(video_output_dir, traj_type)):
+                    shutil.rmtree(os.path.join(video_output_dir, traj_type))
+                if not os.path.exists(os.path.join(video_output_dir, traj_type)):
+                    os.makedirs(os.path.join(video_output_dir, traj_type))
                 render_novel_views_uncertainty(
                     trainer, render_data, save_img_path,
                     fps=render_novel_cfg.get("fps", cfg.render.fps)

@@ -29,8 +29,6 @@ trainer:
       inverse_depth: False # whether to use inverse depth, NOTE that when set to True, must normalize=True
       normalize: False # whether to normalize depth loss
       loss_type: l1 # choose from ["l1", "l2"]
-    affine:
-      w: 0.00001 # weight of affine regularization
   res_schedule:
     double_steps: 250 # training starts at 1/d resolution, every n steps this is doubled
     downscale_times: 2 # at the beginning, resolution is 1/2^d, where d is this number
@@ -116,29 +114,12 @@ model:
     optim:
       all:
         lr: 0.01
-  Affine:
-    type: models.modules.AffineTransform
-    params:
-      embedding_dim: 4
-      base_mlp_layer_width: 64
-      pixel_affine: False
-    optim:
-      all:
-        lr: 1.0e-5
-        weight_decay: 1.0e-6
 
 # ------------- render ------------ #
 render:
-  fps: 10 # frames per second for the main rendered output
-  render_full: True # whether to render full resolution videos
-  render_test: True # whether to render test set
-  render_novel: 
-    traj_types:
-      # - front_center_interp # type of trajectory for novel view synthesis
-      - lane_shift #Only modes with 40 frames of training are supported
-    fps: 24 # frames per second for novel view rendering
-    render_EIG: True
-    lane_shift_dist: 3.0
+  fps: 16 # frames per second for the main rendered output
+  render_full: False # whether to render full resolution videos
+  render_test: False # whether to render test set
   vis_lidar: False # whether to visualize lidar points on ground truth images
   vis_sky: False # whether to include "rgb_sky" and "rgb_sky_blend" in rendered keys
   vis_error: False # whether to include "rgb_error_map" in rendered keys
@@ -148,4 +129,4 @@ logging:
   vis_freq: 2000 # how often to visualize training stats
   print_freq: 500 # how often to print training stats
   saveckpt_freq: 15000 # how often to save checkpoints
-  save_seperate_video: True # whether to save seperate videos for each scene
+  save_seperate_video: False # whether to save seperate videos for each scene

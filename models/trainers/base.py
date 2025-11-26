@@ -131,7 +131,7 @@ class BasicTrainer(nn.Module):
     
     @property
     def in_test_set(self):
-        return self.cur_frame.item() in self.test_set_indices
+        return False # for trans camera
     
     def set_train(self):
         for model in self.models.values():

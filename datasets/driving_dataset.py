@@ -587,13 +587,16 @@ class DrivingDataset(SceneDataset):
                 # it makes no sense to have test timesteps before the start timestep
                 self.data_cfg.pixel_source.test_image_stride,
                 self.num_img_timesteps,
-                self.data_cfg.pixel_source.test_image_stride,
+                1,
             )
         else:
             test_timesteps = []
         train_timesteps = np.array(
             [i for i in range(self.num_img_timesteps) if i not in test_timesteps]
         )
+        if "test_cameras" in self.data_cfg.pixel_source:
+            test_timesteps = train_timesteps
+        
         logger.info(
             f"Train timesteps: \n{np.arange(self.start_timestep, self.end_timestep)[train_timesteps]}"
         )
@@ -606,9 +609,16 @@ class DrivingDataset(SceneDataset):
         for t in range(self.num_img_timesteps):
             if t in train_timesteps:
                 for cam in range(self.pixel_source.num_cams):
-                    train_indices.append(t * self.pixel_source.num_cams + cam)
-            elif t in test_timesteps:
+                    if "train_cameras" in self.data_cfg.pixel_source:
+                        if self.pixel_source.camera_list[cam] not in self.data_cfg.pixel_source.train_cameras:
+                            continue
+                    cur_indices = t * self.pixel_source.num_cams + cam
+                    train_indices.append(cur_indices)
+            if t in test_timesteps:
                 for cam in range(self.pixel_source.num_cams):
+                    if "test_cameras" in self.data_cfg.pixel_source:
+                        if self.pixel_source.camera_list[cam] not in self.data_cfg.pixel_source.test_cameras:
+                            continue
                     test_indices.append(t * self.pixel_source.num_cams + cam)
         logger.info(f"Number of train indices: {len(train_indices)}")
         logger.info(f"Train indices: {train_indices}")
@@ -646,7 +656,7 @@ class DrivingDataset(SceneDataset):
                 )
                 
                 # project lidar points to the image plane
-                if cam.undistort:
+                if 0: #cam.undistort:
                     new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
                                 cam.intrinsics[frame_idx].cpu().numpy(),
                                 cam.distortions[frame_idx].cpu().numpy(),
@@ -732,7 +742,7 @@ class DrivingDataset(SceneDataset):
         
         novel_trajs = {}
         for traj_type in traj_types:
-            if traj_type == "lane_shift":
+            if traj_type == "lane_shift" or traj_type == "switch_camera":
                 novel_trajs[traj_type] = None
                 continue
             novel_trajs[traj_type] = get_interp_novel_trajectories(

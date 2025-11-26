@@ -216,22 +216,23 @@ def main(args):
                         "image_metrics/occupied_ssim": render_results["occupied_ssim"],
                     }
                 )
-            vis_frame_dict = save_videos(
-                render_results,
-                save_pth=os.path.join(
-                    cfg.log_dir, "images", f"step_{step}.png"
-                ),  # don't save the video
-                layout=dataset.layout,
-                num_timestamps=1,
-                keys=render_keys,
-                save_seperate_video=cfg.logging.save_seperate_video,
-                num_cams=dataset.pixel_source.num_cams,
-                fps=cfg.render.fps,
-                verbose=False,
-            )
-            if args.enable_wandb:
-                for k, v in vis_frame_dict.items():
-                    wandb.log({"image_rendering/" + k: wandb.Image(v)})
+            if not args.skip_video_output:
+                vis_frame_dict = save_videos(
+                    render_results,
+                    save_pth=os.path.join(
+                        cfg.log_dir, "images", f"step_{step}.png"
+                    ),  # don't save the video
+                    layout=dataset.layout,
+                    num_timestamps=1,
+                    keys=render_keys,
+                    save_seperate_video=cfg.logging.save_seperate_video,
+                    num_cams=dataset.pixel_source.num_cams,
+                    fps=cfg.render.fps,
+                    verbose=False,
+                )
+                if args.enable_wandb:
+                    for k, v in vis_frame_dict.items():
+                        wandb.log({"image_rendering/" + k: wandb.Image(v)})
             del render_results
             torch.cuda.empty_cache()
                 
@@ -368,6 +369,7 @@ if __name__ == "__main__":
     # viewer
     parser.add_argument("--enable_viewer", action="store_true", help="enable viewer")
     parser.add_argument("--viewer_port", type=int, default=8080, help="viewer port")
+    parser.add_argument("--skip_video_output", action="store_true", help="skip video output")
     
     # misc
     parser.add_argument("opts", help="Modify config options using the command-line", default=None, nargs=argparse.REMAINDER)

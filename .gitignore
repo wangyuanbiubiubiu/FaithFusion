@@ -27,7 +27,7 @@ method_compare/
 simulated_results/
 sky_masks/
 fine_dynamic_masks_example/
-*.sh
+# *.sh
 pandaset-devkit/
 
 # C extensions
