@@ -6,7 +6,7 @@
 A pixel-wise Expected Information Gain (EIG)-driven 3DGS-Diffusion fusion framework for faithful and 3D-consistent driving scene synthesis!
 </p>
 
-## [Project Page](https://mitnku.github.io/faithfusion/) | [Paper](none)
+## [Project Page](https://shalfun.github.io/faithfusion/) | [Paper](none)
 
 <div align="center">
   <img src="docs/FaithFusion/demo.gif" alt=""  width="1100" />
