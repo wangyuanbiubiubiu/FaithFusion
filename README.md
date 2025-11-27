@@ -6,7 +6,7 @@
 A pixel-wise Expected Information Gain (EIG)-driven 3DGS-Diffusion fusion framework for faithful and 3D-consistent driving scene synthesis!
 </p>
 
-## [Project Page](https://shalfun.github.io/faithfusion/) | [Paper](none)
+## [Project Page](https://shalfun.github.io/faithfusion/) | [Paper](https://arxiv.org/abs/2511.21113)
 
 <div align="center">
   <img src="docs/FaithFusion/demo.gif" alt=""  width="1100" />
@@ -16,7 +16,8 @@ A pixel-wise Expected Information Gain (EIG)-driven 3DGS-Diffusion fusion framew
 In controllable driving-scene reconstruction and 3D scene generation, maintaining geometric fidelity while synthesizing visually plausible appearance under large viewpoint shifts is crucial. However, effective fusion of geometry-based 3DGS and appearance-driven diffusion models faces inherent challenges, as the absence of pixel-wise, 3D-consistent editing criteria often leads to over-restoration and geometric drift. To address these issues, we introduce **FaithFusion**, a 3DGS-diffusion fusion framework driven by pixel-wise Expected Information Gain (EIG). EIG acts as a unified policy for coherent spatio-temporal synthesis: it guides diffusion as a spatial prior to refine high-uncertainty regions, while its pixel-level weighting distills the edits back into 3DGS. The resulting plug-and-play system is free from extra prior conditions and structural modifications. Extensive experiments on the Waymo dataset demonstrate that our approach attains SOTA performance across NTA-IoU, NTL-IoU, and FID, maintaining an FID of 107.47 even at 6 meters lane shift. Our code will be released soon.
 
 ## 🔥 Update Log
-- [2025/11/28] The construction pipeline for the Waymo cross-camera rendering restoration training dataset is now available!
+- [2025/11/27] Paper released on [arxiv](https://arxiv.org/abs/2511.21113)!
+- [2025/11/27] The construction pipeline for the Waymo cross-camera rendering restoration training dataset is now available!
 - [2025/11/25] The calculation process for Expected Information Gain (EIG) has been released and is seamlessly integrated into the DriveStudio codebase.
 - [2025/11/25] 📢 📢  Repository Initialization.
 
@@ -58,7 +59,15 @@ coming soon
 ## Citation
 If you find this codebase helpful, please kindly cite:
 ```
-coming soon
+@misc{wang2025faithfusionharmonizingreconstructiongeneration,
+      title={FaithFusion: Harmonizing Reconstruction and Generation via Pixel-wise Information Gain}, 
+      author={YuAn Wang and Xiaofan Li and Chi Huang and Wenhao Zhang and Hao Li and Bosheng Wang and Xun Sun and Jun Wang},
+      year={2025},
+      eprint={2511.21113},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2511.21113}, 
+}
 ```
 ## Acknowledgement 
 Many thanks to the following open-source projects:
