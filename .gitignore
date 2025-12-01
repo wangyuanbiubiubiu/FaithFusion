@@ -187,3 +187,8 @@ cython_debug/
 #.idea/
 local_scripts
 work_dirs
+fusion_certainty
+depth_anything_v2/pretrained
+control_ckpt
+ckpt/
+difix_ref/

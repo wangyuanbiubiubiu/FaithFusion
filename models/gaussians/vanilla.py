@@ -103,6 +103,8 @@ class VanillaGaussians(nn.Module):
         self._features_dc = Parameter(shs[:, 0, :])
         self._features_rest = Parameter(shs[:, 1:, :])
         self._opacities = Parameter(torch.logit(0.1 * torch.ones(self.num_points, 1, device=self.device)))
+        #all bool True        
+        self._origin_mask = torch.ones(self.num_points, dtype=torch.bool, device=self.device)
         
     @property
     def colors(self):
@@ -260,6 +262,16 @@ class VanillaGaussians(nn.Module):
                 self._opacities = Parameter(torch.cat([self._opacities.detach(), split_opacities, dup_opacities], dim=0))
                 self._scales = Parameter(torch.cat([self._scales.detach(), split_scales, dup_scales], dim=0))
                 self._quats = Parameter(torch.cat([self._quats.detach(), split_quats, dup_quats], dim=0))
+
+                num_split = split_means.shape[0]
+                num_dup = dup_means.shape[0]
+                
+                new_origin_mask = torch.cat([
+                    self._origin_mask,
+                    torch.zeros(num_split, dtype=torch.bool, device=self.device),
+                    torch.zeros(num_dup, dtype=torch.bool, device=self.device)
+                ], dim=0)
+                self._origin_mask = new_origin_mask
                 
                 # append zeros to the max_2Dsize tensor
                 self.max_2Dsize = torch.cat(
@@ -326,6 +338,8 @@ class VanillaGaussians(nn.Module):
         self._features_dc = Parameter(self._features_dc[~culls].detach())
         self._features_rest = Parameter(self._features_rest[~culls].detach())
         self._opacities = Parameter(self._opacities[~culls].detach())
+        
+        self._origin_mask = self._origin_mask[~culls]
 
         print(f"     Cull: {n_bef - self.num_points}")
         return culls
@@ -396,14 +410,65 @@ class VanillaGaussians(nn.Module):
         actovated_colors = rgbs
         actovated_shs = colors
         
-        gs_dict = dict(
-            _means=self._means[filter_mask],
-            _opacities=activated_opacities[filter_mask],
-            _rgbs=actovated_colors[filter_mask],
-            _scales=activated_scales[filter_mask],
-            _quats=activated_rotations[filter_mask],
-            _shs=actovated_shs[filter_mask],
-        )
+        if cam.is_diffusion:
+            origin_indices = torch.nonzero(self._origin_mask).squeeze(1)  # Shape: [N']
+            non_origin_indices = torch.nonzero(~self._origin_mask).squeeze(1) 
+
+            
+            non_origin_means = self._means[non_origin_indices]  # [N-O, 3], with gradient
+            # Origin region: use constant values (obtained by detaching from original means, no gradient)
+            origin_means = self._means[origin_indices].detach()  # [O, 3], constant value (no gradient)
+            # Concatenate back to full means (in original index order)
+            temp_means = torch.empty_like(self._means)
+            temp_means[non_origin_indices] = non_origin_means  # Fill the learnable part
+            temp_means[origin_indices] = origin_means          # Fill the constant part (no gradient)
+
+            non_origin_opacities = activated_opacities[non_origin_indices]  # [N-O], with gradient
+            origin_opacities = activated_opacities[origin_indices].detach()  # [O], constant value
+            temp_opacities = torch.empty_like(activated_opacities)
+            temp_opacities[non_origin_indices] = non_origin_opacities
+            temp_opacities[origin_indices] = origin_opacities
+
+            non_origin_scales = activated_scales[non_origin_indices]  # [N-O, 3], with gradient
+            origin_scales = activated_scales[origin_indices].detach()  # [O, 3], constant value
+            temp_scales = torch.empty_like(activated_scales)
+            temp_scales[non_origin_indices] = non_origin_scales
+            temp_scales[origin_indices] = origin_scales
+
+            non_origin_rotations = activated_rotations[non_origin_indices]  # [N-O, 4], with gradient
+            origin_rotations = activated_rotations[origin_indices].detach()  # [O, 4], constant value
+            temp_rotations = torch.empty_like(activated_rotations)
+            temp_rotations[non_origin_indices] = non_origin_rotations
+            temp_rotations[origin_indices] = origin_rotations
+
+            #In practice, novel-view fix gs pose effect will be better than the non-fix most of the time
+            fix_position = True
+            fix_opacities = False
+            fix_scales = False
+            fix_rotations = True
+            if fix_opacities:
+                activated_opacities = temp_opacities
+            if fix_scales:
+                activated_scales = temp_scales
+            if fix_rotations:
+                activated_rotations = temp_rotations
+            gs_dict = dict(
+                _means=temp_means[filter_mask],
+                _opacities=activated_opacities[filter_mask],
+                _rgbs=actovated_colors[filter_mask],
+                _scales=activated_scales[filter_mask],
+                _quats=activated_rotations[filter_mask],
+                _shs=actovated_shs[filter_mask],
+            )
+        else:
+            gs_dict = dict(
+                _means=self._means[filter_mask],
+                _opacities=activated_opacities[filter_mask],
+                _rgbs=actovated_colors[filter_mask],
+                _scales=activated_scales[filter_mask],
+                _quats=activated_rotations[filter_mask],
+                _shs=actovated_shs[filter_mask],
+            )
         
         # check nan and inf in gs_dict
         for k, v in gs_dict.items():

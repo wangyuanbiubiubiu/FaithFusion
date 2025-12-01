@@ -79,6 +79,8 @@ class BasicTrainer(nn.Module):
         test_set_indices: List[int] = None,
         scene_aabb: torch.Tensor = None,
         device=None,
+        diffusion_fusion=False,
+        diffusion_used_times=1,
     ):
         super().__init__()
         self._type = type
@@ -96,6 +98,8 @@ class BasicTrainer(nn.Module):
         # dataset infos
         self.num_train_images = num_train_images
         self.num_full_images = num_full_images
+        self.diffusion_fusion = diffusion_fusion
+        self.diffusion_used_times = diffusion_used_times
         
         # init scene scale
         self._init_scene(scene_aabb=scene_aabb)
@@ -665,70 +669,119 @@ class BasicTrainer(nn.Module):
         if "egocar_masks" in image_infos:
             # in the case of egocar, we need to mask out the egocar region
             valid_loss_mask = (1.0 - image_infos["egocar_masks"]).float()
-        else:
+        elif image_infos["sky_masks"] is not None:
             valid_loss_mask = torch.ones_like(image_infos["sky_masks"])
-            
+        elif "gain" in image_infos:
+            valid_loss_mask = torch.ones_like(image_infos["gain"])
+
         gt_rgb = image_infos["pixels"] * valid_loss_mask[..., None]
         predicted_rgb = outputs["rgb"] * valid_loss_mask[..., None]
         
-        gt_occupied_mask = (1.0 - image_infos["sky_masks"]).float() * valid_loss_mask
-        pred_occupied_mask = outputs["opacity"].squeeze() * valid_loss_mask
-        
         # rgb loss
-        Ll1 = torch.abs(gt_rgb - predicted_rgb).mean()
+        if "gain" in image_infos:
+            if image_infos["diffusion_type"] in ["difix", "EIGent"]:
+                extra_diff_weight = 0.7
+            else:
+                extra_diff_weight = 1.0
+        else:
+            extra_diff_weight = 1.0
+        
         simloss = 1 - self.ssim(gt_rgb.permute(2, 0, 1)[None, ...], predicted_rgb.permute(2, 0, 1)[None, ...])
+        #need to adjust the parameters for your set of scenarios
+        if "gain" in image_infos and image_infos["diffusion_type"] in ["EIGent"] and self.step < 20000: 
+            gain_th_low = 0.05
+            gain_th_high = 0.2
+            gain_th_vh = 1.0
+            gain = image_infos["gain"].float()
+            mask_ignore = gain < gain_th_low
+            mask_low = (gain >= gain_th_low) & (gain < gain_th_high)
+            mask_high = (gain >= gain_th_high) & (gain < gain_th_vh)
+            mask_vh = gain >= gain_th_vh
+            
+            l1_base = torch.abs(gt_rgb - predicted_rgb)
+            
+            weight = torch.zeros_like(l1_base)
+            weight[mask_ignore] = 0.1
+            weight[mask_low] = 0.3
+            weight[mask_high] = extra_diff_weight
+            weight[mask_vh] = 1.0
+            
+            Ll1 = (l1_base * weight).mean() #geometric drift weighting
+            simloss = simloss * extra_diff_weight
+        else:
+            Ll1 = torch.abs(gt_rgb - predicted_rgb).mean() * extra_diff_weight
+            simloss = simloss * extra_diff_weight
+            
         loss_dict.update({
             "rgb_loss": self.losses_dict.rgb.w * Ll1,
             "ssim_loss": self.losses_dict.ssim.w * simloss,
         })
         
         # mask loss
-        if self.sky_opacity_loss_fn is not None:
+        if self.sky_opacity_loss_fn is not None and image_infos["sky_masks"] is not None:
+            gt_occupied_mask = (1.0 - image_infos["sky_masks"]).float() * valid_loss_mask
+            pred_occupied_mask = outputs["opacity"].squeeze() * valid_loss_mask
+
             sky_loss_opacity = self.sky_opacity_loss_fn(pred_occupied_mask, gt_occupied_mask) * self.losses_dict.mask.w
+            sky_loss_opacity = sky_loss_opacity * extra_diff_weight
+
             loss_dict.update({"sky_loss_opacity": sky_loss_opacity})
         
         # depth loss
-        if self.depth_loss_fn is not None:
+        if self.depth_loss_fn is not None and image_infos["lidar_depth_map"] is not None:
             gt_depth = image_infos["lidar_depth_map"] 
             lidar_hit_mask = (gt_depth > 0).float() * valid_loss_mask
             pred_depth = outputs["depth"]
-            depth_loss = self.depth_loss_fn(pred_depth, gt_depth, lidar_hit_mask)
-            
-            lidar_w_decay = self.losses_dict.depth.get("lidar_w_decay", -1)
-            if lidar_w_decay > 0:
-                decay_weight = np.exp(-self.step / 8000 * lidar_w_decay)
+            if lidar_hit_mask.sum() < 1e-6:
+                depth_loss =  torch.tensor(0.0, requires_grad=True)
             else:
-                decay_weight = 1
-            depth_loss = depth_loss * self.losses_dict.depth.w * decay_weight
+                depth_loss = self.depth_loss_fn(pred_depth, gt_depth, lidar_hit_mask)
+                lidar_w_decay = self.losses_dict.depth.get("lidar_w_decay", -1)
+                if lidar_w_decay > 0:
+                    decay_weight = np.exp(-self.step / 8000 * lidar_w_decay)
+                else:
+                    decay_weight = 1
+                depth_loss = depth_loss * self.losses_dict.depth.w * decay_weight
+            if "diffusion_type" in image_infos and image_infos["diffusion_type"] == "EIGent":
+                depth_loss = depth_loss * 0.1
+            else:
+                depth_loss = depth_loss * extra_diff_weight
             loss_dict.update({"depth_loss": depth_loss})
+
+            # from pvg: https://github.com/fudan-zvg/PVG/blob/b4162a9135282e0f3c929054f16be1b3fbacd77a/train.py#L161
+            inverse_depth_smoothness_reg = self.losses_dict.get("inverse_depth_smoothness", None)
+            if inverse_depth_smoothness_reg is not None:
+                inverse_depth = 1 / (outputs["depth"] + 1e-5)
+                loss_inv_depth = kornia.losses.inverse_depth_smoothness_loss(
+                    inverse_depth[None].repeat(1, 1, 1, 3).permute(0, 3, 1, 2),
+                    image_infos["pixels"][None].permute(0, 3, 1, 2)
+                )
+                if "diffusion_type" in image_infos and image_infos["diffusion_type"] in ["difix", "EIGent"]:
+                    loss_inv_depth = 0.0 * loss_inv_depth
+                loss_inv_depth = loss_inv_depth * extra_diff_weight
+                loss_dict.update({
+                    "inverse_depth_smoothness_loss": inverse_depth_smoothness_reg.w * loss_inv_depth
+                })   
             
         # ----- reg loss -----
         opacity_entropy_reg = self.losses_dict.get("opacity_entropy", None)
         if opacity_entropy_reg is not None:
             pred_opacity = torch.clamp(outputs["opacity"].squeeze(), 1e-6, 1 - 1e-6)
+            opacity_entropy_loss = opacity_entropy_reg.w * (-pred_opacity * torch.log(pred_opacity)).mean()
+            opacity_entropy_loss = opacity_entropy_loss * extra_diff_weight
             loss_dict.update({
-                "opacity_entropy_loss": opacity_entropy_reg.w * (-pred_opacity * torch.log(pred_opacity)).mean()
+                "opacity_entropy_loss": opacity_entropy_loss
             })
             
-        # from pvg: https://github.com/fudan-zvg/PVG/blob/b4162a9135282e0f3c929054f16be1b3fbacd77a/train.py#L161
-        inverse_depth_smoothness_reg = self.losses_dict.get("inverse_depth_smoothness", None)
-        if inverse_depth_smoothness_reg is not None:
-            inverse_depth = 1 / (outputs["depth"] + 1e-5)
-            loss_inv_depth = kornia.losses.inverse_depth_smoothness_loss(
-                inverse_depth[None].repeat(1, 1, 1, 3).permute(0, 3, 1, 2),
-                image_infos["pixels"][None].permute(0, 3, 1, 2)
-            )
-            loss_dict.update({
-                "inverse_depth_smoothness_loss": inverse_depth_smoothness_reg.w * loss_inv_depth
-            })
-            
+        
         # affine reg loss
         affine_reg = self.losses_dict.get("affine", None)
         if affine_reg is not None and "Affine" in self.models:
-            affine_trs = self.models['Affine']({"img_idx": image_infos["img_idx"].flatten()[0]})
+            affine_trs = self.models['Affine'](image_infos)
             reg_mat = torch.eye(3, device=self.device)
             reg_shift = torch.zeros(3, device=self.device)
             loss_affine = torch.abs(affine_trs[..., :3, :3] - reg_mat).mean() + torch.abs(affine_trs[..., :3, 3:] - reg_shift).mean()
+            loss_affine = loss_affine * extra_diff_weight
             loss_dict.update({
                 "affine_loss": affine_reg.w * loss_affine
             })
@@ -746,6 +799,9 @@ class BasicTrainer(nn.Module):
                 
                 if dynamic_pred_mask.sum() > 0:
                     Ll1 = torch.abs(gt_rgb[dynamic_pred_mask] - predicted_rgb[dynamic_pred_mask]).mean()
+                    Ll1 = Ll1 * extra_diff_weight
+                    if "diffusion_type" in image_infos and image_infos["diffusion_type"] in ["difix", "EIGent"]:
+                        Ll1 = Ll1 * 0.0
                     loss_dict.update({
                         "vehicle_region_rgb_loss": weight_factor * Ll1,
                     })
@@ -754,6 +810,7 @@ class BasicTrainer(nn.Module):
         for class_name in self.gaussian_classes.keys():
             class_reg_loss = self.models[class_name].compute_reg_loss()
             for k, v in class_reg_loss.items():
+                v = v * extra_diff_weight
                 loss_dict[f"{class_name}_{k}"] = v
         return loss_dict
     
@@ -785,6 +842,8 @@ class BasicTrainer(nn.Module):
                 # "lr_schedulers": {k: v.state_dict() for k, v in self.lr_schedulers.items()},
                 # "grad_scaler": self.grad_scaler.state_dict(),
             })
+        if hasattr(self.models["Background"], "_origin_mask"):
+            state_dict.update({"Background_origin_mask": self.models["Background"]._origin_mask})
         return state_dict
 
     def load_state_dict(self, state_dict: dict, load_only_model: bool =True, strict: bool = True):
@@ -820,7 +879,11 @@ class BasicTrainer(nn.Module):
                 continue
             msg = model.load_state_dict(model_state_dict[class_name], strict=strict)
             logger.info(f"{class_name}: {msg}")
-        msg = super().load_state_dict(state_dict, strict)
+        
+        if "Background_origin_mask" in state_dict:
+            background_origin_mask = state_dict.pop("Background_origin_mask")
+            self.models["Background"]._origin_mask = background_origin_mask
+        msg = super().load_state_dict(state_dict, strict=False)
         logger.info(f"BasicTrainer: {msg}")
         
     def resume_from_checkpoint(

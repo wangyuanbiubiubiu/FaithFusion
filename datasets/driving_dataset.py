@@ -17,6 +17,9 @@ from utils.visualization import get_layout
 from utils.geometry import transform_points
 from utils.camera import get_interp_novel_trajectories
 from utils.misc import export_points_to_ply, import_str
+from PIL import Image
+
+import open3d as o3d
 
 logger = logging.getLogger()
 
@@ -70,6 +73,13 @@ class DrivingDataset(SceneDataset):
         # to make sure the last timestep is included
         self.end_timestep = end_timestep + 1
         self.start_timestep = self.data_cfg.start_timestep
+
+        # ---- load diffusion data ---- #
+        if "diffusion" in self.data_cfg:
+            self.diffusion_data = self.data_cfg.diffusion
+            self.load_offline_diffusion_data()
+        else:
+            self.diffusion_data = None
         
         # ---- create layout for visualization ---- #
         self.layout = get_layout(self.type)
@@ -79,7 +89,7 @@ class DrivingDataset(SceneDataset):
         assert self.pixel_source is not None and self.lidar_source is not None, \
             "Must have both pixel source and lidar source"
         self.project_lidar_pts_on_images(
-            delete_out_of_view_points=True
+            delete_out_of_view_points="diffusion" not in data_cfg
         )
         self.aabb = self.get_aabb()
 
@@ -95,6 +105,19 @@ class DrivingDataset(SceneDataset):
         # ---- create split wrappers ---- #
         image_sets = self.build_split_wrapper()
         self.train_image_set, self.test_image_set, self.full_image_set = image_sets
+        if "diffusion" in self.data_cfg:
+            self.train_image_set.diffusion_cfg = self.data_cfg.diffusion
+            self.train_image_set.dist_list = self.dist_list
+            self.train_image_set.small_dist_list = self.small_dist_list
+            self.train_image_set.object_dist_list = self.object_dist_list
+            self.train_image_set.diffusion_rgb = self.diffusion_rgb
+            self.train_image_set.fusion_gain = self.fusion_gain
+            self.train_image_set.diffusion_sky_mask = self.diffusion_sky_mask
+            self.train_image_set.diffusion_depth_map = self.diffusion_depth_map
+            self.train_image_set.diffusion_mask = self.diffusion_mask
+            self.train_image_set.diffusion_img_id = self.diffusion_img_id
+        else:
+            self.train_image_set.diffusion_cfg = None
         
         # debug use
         # self.seg_dynamic_instances_in_lidar_frame(-1, frame_idx=0)
@@ -206,7 +229,8 @@ class DrivingDataset(SceneDataset):
     def seg_dynamic_instances_in_lidar_frame(
         self,
         instance_ids: Union[int, list],
-        frame_idx: int
+        frame_idx: int,
+        return_pts=False
         ):
         if isinstance(instance_ids, int):
             instance_num = len(self.pixel_source.instances_pose[frame_idx])
@@ -247,18 +271,24 @@ class DrivingDataset(SceneDataset):
 
         valid_points = lidar_pts[valid_mask]
         valid_colors = self.lidar_source.colors[lidar_dict["lidar_mask"]][valid_mask]
-        
-        if DEBUG_PCD:
-            export_points_to_ply(
-                valid_points,
-                valid_colors,
-                save_path=os.path.join(DEBUG_OUTPUT_DIR, "vehicle_lidar_pts.ply")
-            )
-            export_points_to_ply(
-                lidar_pts,
-                self.lidar_source.colors[lidar_dict["lidar_mask"]],
-                save_path=os.path.join(DEBUG_OUTPUT_DIR, "lidar_pts.ply")
-            )
+        if return_pts:
+            vehicle_pts = lidar_pts[valid_mask]
+            vehicle_colors = self.lidar_source.colors[lidar_dict["lidar_mask"]][valid_mask]
+            global_pts = lidar_pts[~valid_mask]
+            global_colors = self.lidar_source.colors[lidar_dict["lidar_mask"]][~valid_mask]
+            return vehicle_pts, vehicle_colors, global_pts, global_colors
+        else:
+            if DEBUG_PCD:
+                export_points_to_ply(
+                    valid_points,
+                    valid_colors,
+                    save_path=os.path.join(DEBUG_OUTPUT_DIR, "vehicle_lidar_pts.ply")
+                )
+                export_points_to_ply(
+                    lidar_pts,
+                    self.lidar_source.colors[lidar_dict["lidar_mask"]],
+                    save_path=os.path.join(DEBUG_OUTPUT_DIR, "lidar_pts.ply")
+                )
         
     def get_init_objects(
         self,
@@ -343,17 +373,46 @@ class DrivingDataset(SceneDataset):
         
         logger.info(f"Aggregating lidar points across {self.frame_num} frames")
         for ins_id in instance_dict:
+            o_size = self.pixel_source.instances_size[ins_id]
             instance_dict[ins_id]["pts"] = torch.cat(instance_dict[ins_id]["pts"], dim=0)
+            instance_dict[ins_id]["real_pts"] = instance_dict[ins_id]["pts"].clone()
             instance_dict[ins_id]["colors"] = torch.cat(instance_dict[ins_id]["colors"], dim=0)
             # instance_dict[ins_id]["flows"] = torch.cat(instance_dict[ins_id]["flows"], dim=0)
             instance_dict[ins_id]["num_pts"] = instance_dict[ins_id]["pts"].shape[0]
+
+            x_len, y_len, z_len = o_size
+            fake_num = 5000
+            rand_x = ((torch.rand(fake_num, device=o_size.device) - 0.5) * x_len)
+            rand_y = ((torch.rand(fake_num, device=o_size.device) - 0.5) * y_len)
+            rand_z = ((torch.rand(fake_num, device=o_size.device) - 0.5) * z_len)
+            sampled_pts = torch.stack([rand_x, rand_y, rand_z], dim=1)
+            instance_dict[ins_id]["fake_pts"] = sampled_pts
+
             if instance_dict[ins_id]["num_pts"] > instance_max_pts:
                 # randomly sample points
                 sampled_idx = torch.randperm(instance_dict[ins_id]["num_pts"])[:instance_max_pts]
                 instance_dict[ins_id]["pts"] = instance_dict[ins_id]["pts"][sampled_idx]
+                instance_dict[ins_id]["real_pts"] = instance_dict[ins_id]["real_pts"][sampled_idx]
                 instance_dict[ins_id]["colors"] = instance_dict[ins_id]["colors"][sampled_idx]
                 # instance_dict[ins_id]["flows"] = instance_dict[ins_id]["flows"][sampled_idx]
                 instance_dict[ins_id]["num_pts"] = instance_max_pts
+            elif instance_dict[ins_id]["num_pts"] < instance_max_pts and instance_dict[ins_id]["num_pts"] > 0:
+                num_needed = instance_max_pts - instance_dict[ins_id]["num_pts"]
+                
+                x_len, y_len, z_len = o_size
+                rand_x = ((torch.rand(num_needed, device=o_size.device) - 0.5) * x_len)
+                rand_y = ((torch.rand(num_needed, device=o_size.device) - 0.5) * y_len)
+                rand_z = ((torch.rand(num_needed, device=o_size.device) - 0.5) * z_len)
+                sampled_pts = torch.stack([rand_x, rand_y, rand_z], dim=1)
+                
+                
+                mean_color = instance_dict[ins_id]["colors"].mean(dim=0, keepdim=True)
+                sampled_colors = mean_color.repeat(num_needed, 1)
+                
+                instance_dict[ins_id]["pts"] = torch.cat([instance_dict[ins_id]["pts"], sampled_pts], dim=0)
+                instance_dict[ins_id]["colors"] = torch.cat([instance_dict[ins_id]["colors"], sampled_colors], dim=0)
+                instance_dict[ins_id]["num_pts"] = instance_max_pts
+    
             logger.info(f"Instance {ins_id} has {instance_dict[ins_id]['num_pts']} lidar sample points")
         
         if only_moving:
@@ -377,6 +436,7 @@ class DrivingDataset(SceneDataset):
                         new_instance_dict[k] = v
                         logger.info(f"Instance {k} has {v['num_pts']} lidar sample points")
             instance_dict = new_instance_dict
+            logger.info(f"Remaining instances after filtering: {len(instance_dict)}")
             
         # get instance info
         for ins_id in instance_dict:
@@ -384,12 +444,31 @@ class DrivingDataset(SceneDataset):
             instance_dict[ins_id]["size"] = self.pixel_source.instances_size[ins_id]
             instance_dict[ins_id]["frame_info"] = self.pixel_source.per_frame_instance_mask[:, ins_id]
         
+        if "diffusion" in self.data_cfg:
+            output_dir = f"{self.data_cfg.log_dir}/aggregated_instance_lidar_pts"
+            if os.path.exists(output_dir):
+                import shutil
+                shutil.rmtree(output_dir)
+            os.makedirs(output_dir, exist_ok=True)
+            for ins_id in instance_dict:
+                export_points_to_ply(
+                    instance_dict[ins_id]["real_pts"],
+                    instance_dict[ins_id]["colors"],
+                    save_path=os.path.join(output_dir, f"{ins_id}.ply")
+                )
+            for ins_id in instance_dict:
+                export_points_to_ply(
+                    instance_dict[ins_id]["fake_pts"],
+                    instance_dict[ins_id]["fake_pts"] * 0.0 + 0.5,
+                    save_path=os.path.join(output_dir, f"{ins_id}_fake.ply")
+                )
+
         if DEBUG_PCD:
             output_dir = os.path.join(DEBUG_OUTPUT_DIR, "aggregated_instance_lidar_pts")
             os.makedirs(output_dir, exist_ok=True)
             for ins_id in instance_dict:
                 export_points_to_ply(
-                    instance_dict[ins_id]["pts"],
+                    instance_dict[ins_id]["real_pts"],
                     instance_dict[ins_id]["colors"],
                     save_path=os.path.join(output_dir, f"ID={ins_id}.ply")
                 )
@@ -472,6 +551,56 @@ class DrivingDataset(SceneDataset):
         
         return instance_dict
 
+    def recon_global_pts(
+        self,
+        seed_pts: Tensor,
+        valid_instances_dict: Dict[int, Dict[str, Tensor]],
+        seed_colors: Tensor = None,
+        seed_time: Tensor = None,
+    ):  
+        # return
+        voxel_size = 0.05  # 与TSDF的voxel_length保持一致
+        occupied_voxel_indices = set()  
+        occupied_ground_voxel_indices = set ()
+        global_all_pts = torch.tensor([], dtype=torch.float32, device=self.device)
+        global_all_colors = torch.tensor([], dtype=torch.float32, device=self.device)
+
+        instance_ids = list(valid_instances_dict.keys())
+        for frame_idx in tqdm(
+                self.train_indices, 
+                desc="Projecting lidar pts aggregate",
+                dynamic_ncols=True
+            ):   
+            vehicle_pts, vehicle_colors, global_pts, global_colors = \
+                self.seg_dynamic_instances_in_lidar_frame(instance_ids, frame_idx=frame_idx, return_pts=True)
+            global_pts_np = global_pts.cpu().numpy()  # (N, 3)
+
+            voxel_indices = (global_pts_np / voxel_size).astype(np.int32)
+            voxel_indices_tuple = [tuple(vi) for vi in voxel_indices]
+            
+            new_pts_mask = [vi not in occupied_voxel_indices for vi in voxel_indices_tuple]
+            new_pts_mask_tensor = torch.tensor(new_pts_mask).to(self.device)
+            
+            new_global_pts = global_pts[new_pts_mask_tensor]
+            new_global_colors = global_colors[new_pts_mask_tensor]
+
+            if len(new_global_pts) > 0:
+                global_all_pts = torch.cat([global_all_pts, new_global_pts], dim=0)
+                global_all_colors = torch.cat([global_all_colors, new_global_colors], dim=0)
+
+            for i, vi in enumerate(voxel_indices_tuple):
+                if vi not in occupied_voxel_indices:
+                    occupied_voxel_indices.add(vi)                        
+
+        output_dir = f"{self.data_cfg.log_dir}/aggregate_static_world_pts"    
+        os.makedirs(output_dir, exist_ok=True)
+        export_points_to_ply(
+                    global_all_pts,
+                    global_all_colors,
+                    save_path=os.path.join(output_dir, f"aggregate_static_world_pts.ply")
+                )
+
+           
     def filter_pts_in_boxes(
         self,
         seed_pts: Tensor,
@@ -606,6 +735,8 @@ class DrivingDataset(SceneDataset):
 
         # propagate the train and test timesteps to the train and test indices
         train_indices, test_indices = [], []
+        self.diffusion_img_id = {}
+        global_img_id = 1 #其他相机id均是0
         for t in range(self.num_img_timesteps):
             if t in train_timesteps:
                 for cam in range(self.pixel_source.num_cams):
@@ -614,6 +745,12 @@ class DrivingDataset(SceneDataset):
                             continue
                     cur_indices = t * self.pixel_source.num_cams + cam
                     train_indices.append(cur_indices)
+                    if self.pixel_source.camera_list[cam] == 0 and hasattr(self, 'seg_list') and cur_indices in self.seg_list:
+                        self.diffusion_img_id[cur_indices] = {}
+                        for step_id, rgb_info in self.diffusion_rgb[cur_indices].items():
+                            self.diffusion_img_id[cur_indices][step_id] = global_img_id
+                            global_img_id += 1
+                            train_indices.append(cur_indices)
             if t in test_timesteps:
                 for cam in range(self.pixel_source.num_cams):
                     if "test_cameras" in self.data_cfg.pixel_source:
@@ -638,6 +775,8 @@ class DrivingDataset(SceneDataset):
             delete_out_of_view_points: bool
                 If True, the lidar points that are not visible from the camera will be removed.
         """
+        if "diffusion" in self.data_cfg:
+            self.diffusion_depth_map = {}
         for cam in self.pixel_source.camera_data.values():
             lidar_depth_maps = []
             for frame_idx in tqdm(
@@ -654,6 +793,7 @@ class DrivingDataset(SceneDataset):
                     lidar_infos["lidar_origins"]
                     + lidar_infos["lidar_viewdirs"] * lidar_infos["lidar_ranges"]
                 )
+                lidar_points_world = lidar_points.clone()
                 
                 # project lidar points to the image plane
                 if 0: #cam.undistort:
@@ -769,3 +909,13 @@ class DrivingDataset(SceneDataset):
             """
             # Call the PixelSource's method
             return self.pixel_source.prepare_novel_view_render_data(self.type, traj)
+
+    def load_offline_diffusion_data(self):
+        self.seg_list = []
+        self.diffusion_rgb = {}
+        self.fusion_gain = {}
+        self.diffusion_sky_mask = {}
+        self.diffusion_mask = {}
+        self.dist_list = {}
+        self.small_dist_list = {}
+        self.object_dist_list = {}

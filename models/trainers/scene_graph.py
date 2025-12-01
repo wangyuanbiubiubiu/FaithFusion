@@ -50,10 +50,18 @@ class MultiTrainer(BasicTrainer):
                 )
                 
             if class_name in self.misc_classes_keys:
+                if self.diffusion_fusion:
+                    if self.diffusion_used_times == 0 and "Affine" in self.model_config:
+                        images_nums = self.num_full_images
+                    else:
+                        images_nums = self.diffusion_used_times + 1
+                else:
+                    images_nums = self.num_full_images
+               
                 model = import_str(model_cfg.type)(
                     class_name=class_name,
                     **model_cfg.get('params', {}),
-                    n=self.num_full_images,
+                    n=images_nums,
                     device=self.device
                 ).to(self.device)
 
@@ -154,6 +162,13 @@ class MultiTrainer(BasicTrainer):
                     seed_colors=sampled_color,
                     valid_instances_dict=allnode_pts_dict
                 )
+
+                if "diffusion" in dataset.data_cfg:
+                    dataset.recon_global_pts(
+                        seed_pts=sampled_pts,
+                        seed_colors=sampled_color,
+                        valid_instances_dict=allnode_pts_dict
+                    )
                 
                 model.create_from_pcd(
                     init_means=processed_init_pts["pts"], init_colors=processed_init_pts["colors"]
@@ -211,6 +226,8 @@ class MultiTrainer(BasicTrainer):
             Dict[str, torch.Tensor]: output of the model
         """
 
+        if self.diffusion_fusion and "diffusion_img_idx" not in image_infos:
+            image_infos["img_idx"] = torch.full(image_infos['img_idx'].shape, 0, dtype=torch.long).to(self.device)
         # set current time or use temporal smoothing
         normed_time = image_infos["normed_time"].flatten()[0]
         self.cur_frame = torch.argmin(
@@ -231,9 +248,10 @@ class MultiTrainer(BasicTrainer):
         # prapare data
         processed_cam = self.process_camera(
             camera_infos=camera_infos,
-            image_ids=image_infos["img_idx"].flatten()[0],
+            image_ids=image_infos["diffusion_img_idx"].flatten()[0] if "diffusion_img_idx" in image_infos else image_infos["img_idx"].flatten()[0],
             novel_view=novel_view
         )
+        processed_cam.is_diffusion = image_infos["diffusion_type"] != "default"
         gs = self.collect_gaussians(
             cam=processed_cam,
             image_ids=image_infos["img_idx"].flatten()[0]

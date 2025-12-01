@@ -236,13 +236,15 @@ class AffineTransform(nn.Module):
         
     def zero_init(self):
         torch.nn.init.zeros_(self.embedding.weight)
-        for layer in self.decoder:
-            if isinstance(layer, nn.Linear):
-                torch.nn.init.zeros_(layer.weight)
-                torch.nn.init.zeros_(layer.bias)
+        # for layer in self.decoder:
+        #     if isinstance(layer, nn.Linear):
+        torch.nn.init.zeros_(self.decoder[2].weight)
+        torch.nn.init.zeros_(self.decoder[2].bias)
     
     def forward(self, image_infos):
-        if "img_idx" in image_infos and not self.in_test_set:
+        if "diffusion_img_idx" in image_infos:
+            embedding = self.embedding(image_infos["diffusion_img_idx"])
+        elif "img_idx" in image_infos:
             embedding = self.embedding(image_infos["img_idx"])
         else:
             # use mean appearance embedding
