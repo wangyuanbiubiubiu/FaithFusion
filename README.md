@@ -34,7 +34,7 @@ In controllable driving-scene reconstruction and 3D scene generation, maintainin
 ## 🔨 Installation
 
 - 3DGS for Driving Scene: please refer to the installation documentation provided by [**DriveStudio**](https://github.com/ziyc/drivestudio/blob/main/README.md).
-- If you intend to run the integrated 3DGS and restoration model workflow, please configure the necessary environment.  Our EIGent model is built upon modifications to the environment and code of [VideoPainter](https://github.com/TencentARC/VideoPainter), while the environment for [Difix3D+](https://github.com/nv-tlabs/Difix3D) should be configured according to its official instructions.
+- If you intend to run the integrated 3DGS and restoration model workflow, please configure the necessary environment.  Our EIGent model is built upon modifications to the environment and code of [**VideoPainter**](https://github.com/TencentARC/VideoPainter), while the environment for [**Difix3D+**](https://github.com/nv-tlabs/Difix3D) should be configured according to its official instructions.
 
 ## 📊 Prepare Data
 The Waymo data is processed following the pipeline established by the **DriveStudio** project:
@@ -56,7 +56,7 @@ bash scripts/render_EIG_demo.sh
 - We have only adapted the one camera logic for the Waymo dataset and have disabled pedestrian rendering by default, prioritizing the synthesis of rigid vehicles.
 - We provide additional novel view rendering trajectory configurations, specifically lane shift. More details can be found by inspecting the `render.render_novel` section within the configuration YAML files (See `configs/faithfusion/`).
 
-### Training with 3DGS
+### Training 3DGS with EIG
 ```shell
 base scripts/train_3dgs_with_EIG.sh
 ```
