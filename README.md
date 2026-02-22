@@ -28,7 +28,7 @@ In controllable driving-scene reconstruction and 3D scene generation, maintainin
 - [x] Release cross-camera rendering dataset construction pipeline
 - [x] Release EIG-based weighted 3DGS fusion framework
 - [x] Release EIGent inference code
-- [x] Release nuScenes dataset support
+- [x] Release support for nuScenes dataset and multi-camera setups
 - [ ] Release EIGent training code
 - [ ] Release EIGent weights
 - [ ] Release [**WAN2.1**](https://github.com/Wan-Video/Wan2.1)-based training code
