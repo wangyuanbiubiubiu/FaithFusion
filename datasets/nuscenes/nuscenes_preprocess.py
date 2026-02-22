@@ -183,6 +183,9 @@ class NuScenesProcessor(object):
         if "lidar" in self.process_keys:
             self.save_lidar(scene_data, scene_idx)
             print(f"Processed lidar for scene {str(scene_idx).zfill(3)}")
+        if "pose" in self.process_keys:
+            self.save_pose(scene_data, scene_idx)
+            print(f"Processed ego poses for scene {str(scene_idx).zfill(3)}")
         if "dynamic_masks" in self.process_keys:
             self.save_dynamic_mask(scene_data, scene_idx, class_valid='all')
             self.save_dynamic_mask(scene_data, scene_idx, class_valid='human')
@@ -221,6 +224,9 @@ class NuScenesProcessor(object):
         if "lidar" in self.process_keys:
             self.save_lidar_interpolated(scene_data, scene_idx, interpolated_timestamps)
             print(f"Processed lidar for scene {str(scene_idx).zfill(3)}")
+        if "pose" in self.process_keys:
+            self.save_pose_interpolated(scene_data, scene_idx, interpolated_timestamps)
+            print(f"Processed ego poses for scene {str(scene_idx).zfill(3)}")
 
         # process annotated objects
         if "objects" in self.process_keys:
@@ -556,6 +562,30 @@ class NuScenesProcessor(object):
             key_frame_idx += 1
             curr_sample_record = self.nusc.get('sample', curr_sample_record['next'])
 
+    def save_pose(self, scene_data, scene_idx):
+        first_sample_token, last_sample_token = scene_data['first_sample_token'], scene_data['last_sample_token']
+        curr_sample_record = self.nusc.get('sample', first_sample_token)
+        key_frame_idx = 0
+
+        while True:
+            cam_token = curr_sample_record['data']['CAM_FRONT']
+            cam_data = self.nusc.get('sample_data', cam_token)
+
+            ego_pose_data = self.nusc.get('ego_pose', cam_data['ego_pose_token'])
+            ego_to_world = np.eye(4)
+            ego_to_world[:3, :3] = Quaternion(ego_pose_data['rotation']).rotation_matrix
+            ego_to_world[:3, 3] = np.array(ego_pose_data['translation'])
+
+            np.savetxt(
+                f"{self.save_dir}/{str(scene_idx).zfill(3)}/ego_pose/{str(key_frame_idx).zfill(3)}.txt",
+                ego_to_world
+            )
+
+            if curr_sample_record['next'] == '' or curr_sample_record['token'] == last_sample_token:
+                break
+            key_frame_idx += 1
+            curr_sample_record = self.nusc.get('sample', curr_sample_record['next'])
+
     def save_lidar_interpolated(self, scene_data, scene_idx, timestamps: np.array):
         """Parse and save the interpolated lidar data in bin format and lidar pose in world coordinates."""
         # Find the closest LiDAR tokens for each timestamp
@@ -592,6 +622,20 @@ class NuScenesProcessor(object):
                 f"{self.save_dir}/{str(scene_idx).zfill(3)}/lidar_pose/"
                 f"{str(frame_idx).zfill(3)}.txt",
                 lidar_to_world
+            )
+
+    def save_pose_interpolated(self, scene_data, scene_idx, timestamps: np.array):
+        closest_tokens = self.find_closest_img_tokens(scene_data, timestamps, 'CAM_FRONT')
+        
+        for frame_idx, token in enumerate(closest_tokens):
+            cam_data = self.nusc.get('sample_data', token)
+            ego_pose_data = self.nusc.get('ego_pose', cam_data['ego_pose_token'])
+            ego_to_world = np.eye(4)
+            ego_to_world[:3, :3] = Quaternion(ego_pose_data['rotation']).rotation_matrix
+            ego_to_world[:3, 3] = np.array(ego_pose_data['translation'])
+            np.savetxt(
+                f"{self.save_dir}/{str(scene_idx).zfill(3)}/ego_pose/{str(frame_idx).zfill(3)}.txt",
+                ego_to_world
             )
 
     def save_dynamic_mask(self, scene_data, scene_idx, class_valid='all'):
@@ -1072,6 +1116,8 @@ class NuScenesProcessor(object):
             if "calib" in self.process_keys:
                 os.makedirs(f"{self.save_dir}/{str(i).zfill(3)}/extrinsics", exist_ok=True)
                 os.makedirs(f"{self.save_dir}/{str(i).zfill(3)}/intrinsics", exist_ok=True)
+            if "pose" in self.process_keys:
+                os.makedirs(f"{self.save_dir}/{str(i).zfill(3)}/ego_pose", exist_ok=True)
             if "lidar" in self.process_keys:
                 os.makedirs(f"{self.save_dir}/{str(i).zfill(3)}/lidar", exist_ok=True)
                 os.makedirs(f"{self.save_dir}/{str(i).zfill(3)}/lidar_pose", exist_ok=True)
