@@ -413,7 +413,7 @@ def main(args):
         #-------------------------------  logging  ----------------------------------
         with torch.no_grad():
             if (step - last_gain_step) > cfg.diffusion.vis_freq and cfg.diffusion.vis_freq > 0:
-                if "gain" in image_infos:
+                if "gain" in image_infos and image_infos['gain'] is not None:
                         outputs["gain_map"] = image_infos['gain'].clone()
                         diffusion_fusion_vis(outputs, image_infos, os.path.join(cfg.log_dir,"diffusion_fuse"), step)
                         last_gain_step = step

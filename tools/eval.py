@@ -54,7 +54,8 @@ def generate_segment_list(start, end, step, need_append_last=True):
 def prepare_EIGent_render_data(trainer, dataset, dist_max=0.0):
     render_data = []
     camera_downscale = 1.0
-
+    camera_num = dataset.datasource.num_cams
+    idx_map = {img_idx: i for i, img_idx in enumerate(dataset.split_indices)}
     step = 40
     seg_list = generate_segment_list(start=0, end=39, step=step, need_append_last=False)
     for seg_begin in seg_list:
@@ -62,23 +63,28 @@ def prepare_EIGent_render_data(trainer, dataset, dist_max=0.0):
         mock_dist = dist_max / num_x_dist
         for i in range(51):
             if i < num_x_dist:
-                seg = seg_begin
+                frame_seg = seg_begin
                 mock_times = i
             elif i < 49:
-                seg = i - num_x_dist + seg_begin
-                if seg > 39:
-                    seg = 39
+                frame_seg = i - num_x_dist + seg_begin
+                if frame_seg > 39:
+                    frame_seg = 39
                 mock_times = num_x_dist
             else:
-                seg = seg_begin + step - 1
-                if seg > 39:
-                    seg = 39
+                frame_seg = seg_begin + step - 1
+                if frame_seg > 39:
+                    frame_seg = 39
                 mock_times = num_x_dist
-            image_infos, cam_infos = dataset.get_image_mock(seg, camera_downscale, mock_times, mock_dist)
-            render_data.append({
-                "cam_infos": cam_infos,
-                "image_infos": image_infos,
-            })
+            for cam_pos in range(camera_num):
+                img_idx = frame_seg * camera_num + cam_pos
+                if img_idx not in idx_map:
+                    continue
+                seg = idx_map[img_idx]
+                image_infos, cam_infos = dataset.get_image_mock(seg, camera_downscale, mock_times, mock_dist)
+                render_data.append({
+                    "cam_infos": cam_infos,
+                    "image_infos": image_infos,
+                })
     return render_data
 
 def prepare_difix_render_data(trainer, dataset, dist_max=0.0):

@@ -16,6 +16,7 @@ A pixel-wise Expected Information Gain (EIG)-driven 3DGS-Diffusion fusion framew
 In controllable driving-scene reconstruction and 3D scene generation, maintaining geometric fidelity while synthesizing visually plausible appearance under large viewpoint shifts is crucial. However, effective fusion of geometry-based 3DGS and appearance-driven diffusion models faces inherent challenges, as the absence of pixel-wise, 3D-consistent editing criteria often leads to over-restoration and geometric drift. To address these issues, we introduce **FaithFusion**, a 3DGS-diffusion fusion framework driven by pixel-wise Expected Information Gain (EIG). EIG acts as a unified policy for coherent spatio-temporal synthesis: it guides diffusion as a spatial prior to refine high-uncertainty regions, while its pixel-level weighting distills the edits back into 3DGS. The resulting plug-and-play system is free from extra prior conditions and structural modifications. Extensive experiments on the Waymo dataset demonstrate that our approach attains SOTA performance across NTA-IoU, NTL-IoU, and FID, maintaining an FID of 107.47 even at 6 meters lane shift. Our code will be released soon.
 
 ## 🔥 Update Log
+- [2026/02/22] 🌟 FaithFusion has been accepted by **CVPR 2026**! 🎉Cheers! 
 - [2025/12/01] We have released the EIG-driven fusion framework and the inference code for EIGent.
 - [2025/11/27] Paper released on [arxiv](https://arxiv.org/abs/2511.21113)!
 - [2025/11/27] The construction pipeline for the Waymo cross-camera rendering restoration training dataset is now available!
@@ -27,6 +28,7 @@ In controllable driving-scene reconstruction and 3D scene generation, maintainin
 - [x] Release cross-camera rendering dataset construction pipeline
 - [x] Release EIG-based weighted 3DGS fusion framework
 - [x] Release EIGent inference code
+- [x] Release nuScenes dataset support
 - [ ] Release EIGent training code
 - [ ] Release EIGent weights
 - [ ] Release [**WAN2.1**](https://github.com/Wan-Video/Wan2.1)-based training code

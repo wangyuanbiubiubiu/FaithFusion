@@ -71,11 +71,18 @@ class NuScenesCameraData(CameraData):
         
     def load_calibrations(self):
         cam_to_worlds, intrinsics, distortions = [], [], []
+        ego_to_worlds, cam_to_egoes = [], []
         
         # Load the first camera (front) pose to align the world
         camera_front_start = np.loadtxt(
             os.path.join(self.data_path, "extrinsics", f"{self.start_timestep:03d}_0.txt")
         )
+        ego_pose_dir = os.path.join(self.data_path, "ego_pose")
+        ego_to_world_start = None
+        if os.path.exists(ego_pose_dir):
+            start_pose_pth = os.path.join(ego_pose_dir, f"{self.start_timestep:03d}.txt")
+            if os.path.exists(start_pose_pth):
+                ego_to_world_start = np.loadtxt(start_pose_pth)
 
         for t in range(self.start_timestep, self.end_timestep):
             # Load intrinsics
@@ -110,9 +117,27 @@ class NuScenesCameraData(CameraData):
             cam2world = cam2world @ OPENCV2DATASET
             cam_to_worlds.append(cam2world)
 
+            if ego_to_world_start is not None:
+                ego_world = np.loadtxt(os.path.join(ego_pose_dir, f"{t:03d}.txt"))
+                ego_to_worlds.append(np.linalg.inv(camera_front_start) @ ego_world)
+                cam_to_ego = np.linalg.inv(ego_world) @ np.loadtxt(
+                    os.path.join(self.data_path, "extrinsics", f"{t:03d}_{self.cam_id}.txt")
+                )
+                cam_to_egoes.append(cam_to_ego @ OPENCV2DATASET)
+
         self.intrinsics = torch.from_numpy(np.stack(intrinsics, axis=0)).float()
         self.distortions = torch.from_numpy(np.stack(distortions, axis=0)).float()
         self.cam_to_worlds = torch.from_numpy(np.stack(cam_to_worlds, axis=0)).float()
+        if len(ego_to_worlds) > 0:
+            self.ego_to_worlds = torch.from_numpy(np.stack(ego_to_worlds, axis=0)).float()
+            self.cam_to_egoes = torch.from_numpy(np.stack(cam_to_egoes, axis=0)).float()
+    
+    def to(self, device: torch.device):
+        super().to(device)
+        if hasattr(self, "ego_to_worlds"):
+            self.ego_to_worlds = self.ego_to_worlds.to(device)
+        if hasattr(self, "cam_to_egoes"):
+            self.cam_to_egoes = self.cam_to_egoes.to(device)
         
     @classmethod
     def get_camera2worlds(cls, data_path: str, cam_id: str, start_timestep: int, end_timestep: int) -> torch.Tensor:
